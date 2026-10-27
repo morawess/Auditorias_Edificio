@@ -1,222 +1,323 @@
+"""Verificación facial 1:1 entre dos imágenes estáticas.
+
+Este script es el punto de entrada del Sprint 2. Reutiliza las funciones de
+`face_engine.py` y no contiene la implementación del algoritmo facial.
+
+Uso desde la carpeta del proyecto:
+    python reconocimiento_facial.py
+    python reconocimiento_facial.py FotoA.jpg FotoB.jpg
+    python reconocimiento_facial.py FotoA.jpg FotoC.jpg
+    python reconocimiento_facial.py FotoA.jpg FotoB.jpg --sin-ventanas
+
+Las imágenes deben contener exactamente un rostro detectable cada una.
 """
-Script 1: Verificación Biométrica de Identidad para Residentes (Comparación de Imágenes)
-----------------------------------------------------------------------------------------
-Este módulo carga y procesa dos imágenes (una imagen de control de la base de datos del
-edificio/condominio y una imagen de prueba), localiza los rostros presentes, codifica
-sus características biométricas y los compara para verificar si pertenecen al mismo
-residente. Muestra ambas imágenes en pantalla con el recuadro del rostro detectado,
-indicando si el acceso es concedido (coincidencia) o denegado junto con la distancia
-biométrica calculada.
-"""
 
-import os
-import warnings
+from __future__ import annotations
 
-warnings.filterwarnings("ignore", category=UserWarning, module="face_recognition_models")
+import argparse
+import math
+from pathlib import Path
+from typing import Optional, Sequence, Tuple
 
-import cv2
-import face_recognition as fr
+import face_engine as motor
+from config import UMBRAL_DISTANCIA
+from models import ResultadoVerificacion
 
 
-# Configuraciones por defecto del sistema de verificación
-DIRECTORIO_BASE = os.path.dirname(os.path.abspath(__file__))
-IMAGEN_CONTROL_DEFAULT = os.path.join(DIRECTORIO_BASE, "FotoA.jpg")
-IMAGEN_PRUEBA_DEFAULT = os.path.join(DIRECTORIO_BASE, "FotoB.jpg")
-TOLERANCIA_POR_DEFECTO = 0.6
+DIRECTORIO_PROYECTO = Path(__file__).resolve().parent
+UbicacionRostro = Tuple[int, int, int, int]
 
 
-def cargar_y_procesar_imagen(ruta_imagen: str):
+def resolver_ruta(ruta: str | Path) -> Path:
+    """Resuelve una ruta absoluta o relativa de forma predecible.
+
+    Para rutas relativas, primero busca desde el directorio actual de la
+    terminal. Si no existe allí, prueba desde el directorio del proyecto.
     """
-    Carga una imagen desde un archivo y la convierte de RGB (formato de face_recognition)
-    a BGR (formato utilizado por OpenCV para visualización).
+    candidata = Path(ruta).expanduser()
 
-    Args:
-        ruta_imagen (str): Ruta al archivo de imagen.
+    if candidata.is_absolute():
+        return candidata.resolve()
 
-    Returns:
-        numpy.ndarray: Imagen procesada en formato BGR lista para OpenCV y face_recognition.
+    desde_terminal = (Path.cwd() / candidata).resolve()
+    if desde_terminal.exists():
+        return desde_terminal
 
-    Raises:
-        FileNotFoundError: Si el archivo de imagen no existe en la ruta indicada.
+    return (DIRECTORIO_PROYECTO / candidata).resolve()
+
+
+def _cargar_un_rostro(
+    ruta: Path,
+    etiqueta: str,
+) -> tuple[object, UbicacionRostro, object]:
+    """Carga una imagen y extrae la codificación de su único rostro.
+
+    `face_recognition.load_image_file`, usado por `motor.cargar_imagen_rgb`,
+    ya entrega la imagen en RGB. No se debe volver a convertir BGR a RGB.
     """
-    if not os.path.isfile(ruta_imagen):
-        raise FileNotFoundError(f"No se encontró el archivo de imagen en: {ruta_imagen}")
+    es_valida, mensaje = motor.validar_archivo_imagen(str(ruta))
+    if not es_valida:
+        raise ValueError(f"{etiqueta}: {mensaje}")
 
-    imagen_cargada = fr.load_image_file(ruta_imagen)
-    # Convertir la imagen de BGR a RGB / viceversa para su correcta interpretación en OpenCV
-    imagen_procesada = cv2.cvtColor(imagen_cargada, cv2.COLOR_BGR2RGB)
-    return imagen_procesada
+    try:
+        imagen_rgb = motor.cargar_imagen_rgb(str(ruta))
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ValueError(f"{etiqueta}: no se pudo leer la imagen. {error}") from error
 
+    ubicaciones = motor.detectar_rostros(imagen_rgb)
 
-def detectar_y_codificar_rostro(imagen, nombre_referencia: str = "Imagen"):
-    """
-    Localiza el rostro principal en la imagen y codifica sus características faciales.
+    if len(ubicaciones) == 0:
+        raise ValueError(
+            f"{etiqueta}: no se detectó ningún rostro. "
+            "Utilizá una imagen nítida en la que el rostro sea visible."
+        )
 
-    Args:
-        imagen (numpy.ndarray): Imagen cargada y procesada.
-        nombre_referencia (str): Etiqueta descriptiva para mensajes de error.
+    if len(ubicaciones) > 1:
+        raise ValueError(
+            f"{etiqueta}: se detectaron {len(ubicaciones)} rostros. "
+            "Para la comparación 1:1, cada imagen debe contener exactamente uno."
+        )
 
-    Returns:
-        tuple: (ubicacion_rostro, codificacion_rostro) donde ubicacion_rostro es
-               (top, right, bottom, left) y codificacion_rostro es el vector de 128 dimensiones.
+    ubicacion = ubicaciones[0]
+    encoding = motor.codificar_rostro(imagen_rgb, ubicacion)
+    if encoding is None:
+        raise ValueError(
+            f"{etiqueta}: se detectó el rostro, pero no se pudieron codificar "
+            "sus características faciales. Probá con otra imagen."
+        )
 
-    Raises:
-        ValueError: Si no se detecta ningún rostro en la imagen proporcionada.
-    """
-    ubicaciones = fr.face_locations(imagen)
-    if not ubicaciones:
-        raise ValueError(f"No se pudo detectar ningún rostro en '{nombre_referencia}'.")
-
-    ubicacion_principal = ubicaciones[0]
-    codificaciones = fr.face_encodings(imagen, [ubicacion_principal])
-    if not codificaciones:
-        raise ValueError(f"No se pudieron codificar las características faciales en '{nombre_referencia}'.")
-
-    return ubicacion_principal, codificaciones[0]
+    return imagen_rgb, ubicacion, encoding
 
 
-def dibujar_recuadro_rostro(imagen, ubicacion_rostro, color=(0, 255, 0), grosor: int = 2):
-    """
-    Dibuja un rectángulo alrededor del rostro detectado en la imagen.
+def _crear_imagen_visual(
+    imagen_rgb: object,
+    ubicacion: UbicacionRostro,
+    etiqueta: str,
+    coincide: bool,
+):
+    """Convierte RGB a BGR únicamente para dibujar y mostrar con OpenCV."""
+    import cv2
 
-    Args:
-        imagen (numpy.ndarray): Imagen sobre la cual dibujar.
-        ubicacion_rostro (tuple): Coordenadas (top, right, bottom, left) del rostro.
-        color (tuple): Color BGR para el rectángulo.
-        grosor (int): Grosor de las líneas del rectángulo.
-    """
-    arriba, derecha, abajo, izquierda = ubicacion_rostro
+    imagen_bgr = motor.rgb_a_bgr(imagen_rgb.copy())
+    arriba, derecha, abajo, izquierda = ubicacion
+    color = (0, 170, 0) if coincide else (0, 0, 220)
+
     cv2.rectangle(
-        imagen,
+        imagen_bgr,
         (izquierda, arriba),
         (derecha, abajo),
         color,
-        grosor
-    )
-
-
-def comparar_rostros_residente(
-    ruta_control: str = IMAGEN_CONTROL_DEFAULT,
-    ruta_prueba: str = IMAGEN_PRUEBA_DEFAULT,
-    tolerancia: float = TOLERANCIA_POR_DEFECTO
-):
-    """
-    Ejecuta el flujo completo de comparación entre la imagen de control del residente
-    y la imagen de prueba capturada, mostrando los resultados visuales en pantalla.
-    """
-    print("=" * 65)
-    print("  SISTEMA DE ACCESO SIN LLAVES - VERIFICACIÓN DE IDENTIDAD")
-    print("=" * 65)
-    print(f"Cargando foto de control (Residente registrado): {os.path.basename(ruta_control)}")
-    print(f"Cargando foto de prueba  (Intento de acceso)   : {os.path.basename(ruta_prueba)}")
-
-    # 1. Cargar y convertir imágenes para su correcta interpretación
-    foto_control = cargar_y_procesar_imagen(ruta_control)
-    foto_prueba = cargar_y_procesar_imagen(ruta_prueba)
-
-    # 2. Localizar rostros y codificar características faciales
-    lugar_cara_control, cara_codificada_control = detectar_y_codificar_rostro(
-        foto_control, "Foto Control"
-    )
-    lugar_cara_prueba, cara_codificada_prueba = detectar_y_codificar_rostro(
-        foto_prueba, "Foto Prueba"
-    )
-
-    # 3. Comparación de imágenes y cálculo de distancia facial
-    resultado = fr.compare_faces(
-        [cara_codificada_control],
-        cara_codificada_prueba,
-        tolerance=tolerancia
-    )
-    distancia = fr.face_distance([cara_codificada_control], cara_codificada_prueba)
-
-    coincide = bool(resultado[0])
-    valor_distancia = float(distancia[0])
-
-    # Imprimir resultados por consola tal como lo requiere la consigna
-    print("-" * 65)
-    print(f"Resultado de coincidencia (compare_faces): {resultado}")
-    print(f"Distancia facial calculada (face_distance): {distancia}")
-    estado_acceso = "ACCESO AUTORIZADO (Coincide)" if coincide else "ACCESO DENEGADO (No coincide)"
-    print(f"Estado de verificación                   : {estado_acceso}")
-    print("=" * 65)
-
-    # 4. Visualización gráfica: dibujar rectángulos y mostrar resultado sobre la imagen
-    color_resultado = (0, 255, 0) if coincide else (0, 0, 255)
-    dibujar_recuadro_rostro(foto_control, lugar_cara_control, color=(0, 255, 0))
-    dibujar_recuadro_rostro(foto_prueba, lugar_cara_prueba, color=color_resultado)
-
-    texto_pantalla = f"{resultado} {distancia.round(2)}"
-    etiqueta_acceso = "ACCESO PERMITIDO" if coincide else "ACCESO DENEGADO"
-
-    cv2.putText(
-        foto_prueba,
-        texto_pantalla,
-        (30, 45),
-        cv2.FONT_HERSHEY_COMPLEX,
-        0.9,
-        color_resultado,
-        2
+        3,
     )
     cv2.putText(
-        foto_prueba,
-        etiqueta_acceso,
-        (30, 85),
-        cv2.FONT_HERSHEY_COMPLEX,
+        imagen_bgr,
+        etiqueta,
+        (max(izquierda, 8), max(arriba - 12, 24)),
+        cv2.FONT_HERSHEY_SIMPLEX,
         0.75,
-        color_resultado,
-        2
+        color,
+        2,
+        cv2.LINE_AA,
+    )
+    return imagen_bgr
+
+
+def _mostrar_imagenes(
+    imagen_referencia: object,
+    ubicacion_referencia: UbicacionRostro,
+    imagen_prueba: object,
+    ubicacion_prueba: UbicacionRostro,
+    coincide: bool,
+) -> None:
+    """Muestra ambas imágenes. Un fallo de GUI no invalida la comparación."""
+    cv2 = None
+    resultado = "COINCIDENCIA" if coincide else "SIN COINCIDENCIA"
+
+    try:
+        import cv2 as cv2_modulo
+        cv2 = cv2_modulo
+
+        referencia_bgr = _crear_imagen_visual(
+            imagen_referencia,
+            ubicacion_referencia,
+            f"REFERENCIA - {resultado}",
+            coincide,
+        )
+        prueba_bgr = _crear_imagen_visual(
+            imagen_prueba,
+            ubicacion_prueba,
+            f"PRUEBA - {resultado}",
+            coincide,
+        )
+
+        cv2.namedWindow("Imagen de referencia", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("Imagen de prueba", cv2.WINDOW_NORMAL)
+        cv2.imshow("Imagen de referencia", referencia_bgr)
+        cv2.imshow("Imagen de prueba", prueba_bgr)
+        print("\nSe abrieron las ventanas de las dos imágenes.")
+        print("Presioná cualquier tecla con una ventana seleccionada para cerrarlas.")
+        cv2.waitKey(0)
+
+    except Exception as error:
+        print(
+            "[ADVERTENCIA] La comparación se realizó, pero no se pudieron "
+            f"mostrar las ventanas de OpenCV: {error}"
+        )
+        print("Podés volver a ejecutar el comando con --sin-ventanas.")
+    finally:
+        if cv2 is not None:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+
+
+def comparar_imagenes(
+    ruta_referencia: str | Path,
+    ruta_prueba: str | Path,
+    umbral: float = UMBRAL_DISTANCIA,
+    mostrar: bool = False,
+) -> ResultadoVerificacion:
+    """Compara los rostros únicos de dos imágenes y devuelve el resultado.
+
+    Esta función puede ser reutilizada por pruebas automatizadas o por otros
+    módulos. No autoriza accesos ni registra entradas: esas responsabilidades
+    pertenecen a otros componentes del sistema.
+    """
+    if not isinstance(umbral, (int, float)) or not math.isfinite(float(umbral)):
+        raise ValueError("El umbral debe ser un número finito.")
+    if float(umbral) < 0:
+        raise ValueError("El umbral no puede ser negativo.")
+
+    ruta_ref = resolver_ruta(ruta_referencia)
+    ruta_test = resolver_ruta(ruta_prueba)
+
+    imagen_ref, ubicacion_ref, encoding_ref = _cargar_un_rostro(
+        ruta_ref,
+        "Imagen de referencia",
+    )
+    imagen_test, ubicacion_test, encoding_test = _cargar_un_rostro(
+        ruta_test,
+        "Imagen de prueba",
     )
 
-    # 5. Mostrar las imágenes de control y prueba en pantalla
-    cv2.imshow("Foto Control - Residente Registrado", foto_control)
-    cv2.imshow("Foto Prueba - Verificacion de Acceso", foto_prueba)
+    resultado = motor.verificar_1a1(
+        encoding_ref,
+        encoding_test,
+        umbral=float(umbral),
+    )
 
-    print("Presione cualquier tecla en la ventana de imagen para cerrar el programa...")
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if mostrar:
+        _mostrar_imagenes(
+            imagen_ref,
+            ubicacion_ref,
+            imagen_test,
+            ubicacion_test,
+            resultado.coincide,
+        )
+
+    return resultado
 
 
-def seleccionar_imagenes_interactivo():
-    """
-    Permite al usuario elegir con qué imagen de prueba comparar la foto de control
-    o ingresar rutas personalizadas sin necesidad de modificar el código fuente.
-    """
-    imagenes_disponibles = [
-        f for f in os.listdir(DIRECTORIO_BASE)
-        if f.lower().endswith((".jpg", ".jpeg", ".png"))
-    ]
+def _umbral_argumento(valor: str) -> float:
+    """Valida el argumento --umbral de argparse."""
+    try:
+        umbral = float(valor)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("el umbral debe ser numérico") from error
 
-    print("\nImágenes disponibles en el directorio del proyecto:")
-    for idx, nombre_img in enumerate(imagenes_disponibles, start=1):
-        print(f"  [{idx}] {nombre_img}")
+    if not math.isfinite(umbral) or umbral < 0:
+        raise argparse.ArgumentTypeError(
+            "el umbral debe ser un número finito mayor o igual que cero"
+        )
+    return umbral
 
-    print("\nOpciones de ejecución:")
-    print("  [1] Comparar FotoA.jpg (Control) vs FotoB.jpg (Prueba - Misma persona)")
-    print("  [2] Comparar FotoA.jpg (Control) vs FotoC.jpg (Prueba - Otra persona)")
-    print("  [3] Seleccionar imágenes manualmente de la lista")
 
-    opcion = input("\nSeleccione una opción (Enter para opción 1 por defecto): ").strip()
+def crear_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compara un rostro de referencia con un rostro de prueba. "
+            "Cada imagen debe contener exactamente un rostro detectable."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "imagen_referencia",
+        nargs="?",
+        default="FotoA.jpg",
+        help="ruta de la imagen de referencia",
+    )
+    parser.add_argument(
+        "imagen_prueba",
+        nargs="?",
+        default="FotoB.jpg",
+        help="ruta de la imagen que se desea verificar",
+    )
+    parser.add_argument(
+        "--umbral",
+        type=_umbral_argumento,
+        default=UMBRAL_DISTANCIA,
+        help=(
+            "distancia máxima para considerar una coincidencia; "
+            "no representa un porcentaje de certeza"
+        ),
+    )
+    parser.add_argument(
+        "--sin-ventanas",
+        action="store_true",
+        help="no abrir ventanas gráficas de OpenCV",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="mostrar la traza completa si ocurre un error inesperado",
+    )
+    return parser
 
-    if opcion == "2":
-        ruta_prueba = os.path.join(DIRECTORIO_BASE, "FotoC.jpg")
-        return IMAGEN_CONTROL_DEFAULT, ruta_prueba
-    elif opcion == "3" and imagenes_disponibles:
-        try:
-            idx_ctrl = int(input("Ingrese el número de la Foto de Control: ").strip()) - 1
-            idx_prb = int(input("Ingrese el número de la Foto de Prueba: ").strip()) - 1
-            ruta_ctrl = os.path.join(DIRECTORIO_BASE, imagenes_disponibles[idx_ctrl])
-            ruta_prb = os.path.join(DIRECTORIO_BASE, imagenes_disponibles[idx_prb])
-            return ruta_ctrl, ruta_prb
-        except (ValueError, IndexError):
-            print("Selección no válida. Se utilizarán FotoA.jpg y FotoB.jpg por defecto.")
 
-    return IMAGEN_CONTROL_DEFAULT, IMAGEN_PRUEBA_DEFAULT
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = crear_parser()
+    args = parser.parse_args(argv)
+
+    ruta_referencia = resolver_ruta(args.imagen_referencia)
+    ruta_prueba = resolver_ruta(args.imagen_prueba)
+
+    print("=" * 68)
+    print(" VERIFICACIÓN FACIAL 1:1 — SPRINT 2")
+    print("=" * 68)
+    print(f"Referencia: {ruta_referencia}")
+    print(f"Imagen de prueba: {ruta_prueba}")
+    print(f"Umbral configurado: {float(args.umbral):.4f}")
+
+    try:
+        resultado = comparar_imagenes(
+            ruta_referencia,
+            ruta_prueba,
+            umbral=args.umbral,
+            mostrar=not args.sin_ventanas,
+        )
+    except Exception as error:
+        if args.debug:
+            raise
+        print(f"\n[ERROR] {error}")
+        print(
+            "Verificá que las rutas existan, que las imágenes sean válidas "
+            "y que las dependencias estén instaladas en el entorno virtual activo."
+        )
+        return 2
+
+    print("\n" + "-" * 68)
+    if resultado.coincide:
+        print("RESULTADO: COINCIDENCIA")
+    else:
+        print("RESULTADO: SIN COINCIDENCIA")
+    print(f"Distancia facial: {resultado.distancia:.4f}")
+    print(f"Umbral: {float(args.umbral):.4f}")
+    print("La distancia no es un porcentaje ni una probabilidad de identidad.")
+    print("Esta prueba no concede ni deniega por sí sola el acceso al edificio.")
+    print("-" * 68)
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        img_control, img_prueba = seleccionar_imagenes_interactivo()
-        comparar_rostros_residente(img_control, img_prueba)
-    except Exception as error:
-        print(f"\n[ERROR] No se pudo completar la comparación: {error}")
+    raise SystemExit(main())
