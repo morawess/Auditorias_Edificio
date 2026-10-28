@@ -1,5 +1,0 @@
-numpy
-opencv-python
-face-recognition
-cmake
-setuptools<81
