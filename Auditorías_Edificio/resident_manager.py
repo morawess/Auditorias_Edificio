@@ -383,8 +383,9 @@ class ResidenteManager:
                     continue
 
                 try:
-                    # Cargar con cv2 (BGR) y convertir a RGB para face_recognition
-                    imagen_bgr = cv2.imread(ruta)
+                    # En Windows, cv2.imread no soporta rutas con tildes o caracteres Unicode.
+                    datos = np.fromfile(ruta, dtype=np.uint8)
+                    imagen_bgr = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
                     if imagen_bgr is None:
                         print(
                             f"[ADVERTENCIA] No se pudo leer '{imagen_nombre}'. "

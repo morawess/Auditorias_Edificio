@@ -64,7 +64,10 @@ def cargar_base_datos_residentes(ruta_directorio: str):
             continue
 
         ruta_completa = os.path.join(ruta_directorio, archivo)
-        imagen_actual = cv2.imread(ruta_completa)
+        # En Windows, cv2.imread no soporta rutas con tildes o caracteres Unicode.
+        # Se leen los bytes con numpy y se decodifican con cv2.imdecode para máxima compatibilidad.
+        datos = numpy.fromfile(ruta_completa, dtype=numpy.uint8)
+        imagen_actual = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
 
         if imagen_actual is None:
             print(f"[ADVERTENCIA] No se pudo leer la imagen: {archivo}. Se omitirá.")

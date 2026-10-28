@@ -116,7 +116,9 @@ def cargar_imagen_bgr(ruta: str) -> np.ndarray:
     if not os.path.isfile(ruta):
         raise FileNotFoundError(f"No se encontró el archivo de imagen: {ruta}")
 
-    imagen = cv2.imread(ruta)
+    # En Windows, cv2.imread no soporta rutas con tildes o caracteres Unicode.
+    datos = np.fromfile(ruta, dtype=np.uint8)
+    imagen = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
     if imagen is None:
         raise ValueError(f"No se pudo leer la imagen (puede estar corrupta): {ruta}")
 
