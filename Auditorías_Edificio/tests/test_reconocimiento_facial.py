@@ -4,8 +4,12 @@ Estas pruebas simulan el motor facial para validar el flujo y los errores sin
 necesitar cámara ni fotografías reales. No miden la precisión del algoritmo.
 """
 
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 
