@@ -1,0 +1,85 @@
+{
+  "residentes": {
+    "d56c4b0a-f099-4f6e-974b-8a3cc40e5f00": {
+      "id": "d56c4b0a-f099-4f6e-974b-8a3cc40e5f00",
+      "nombre": "Carl Sagan",
+      "autorizado": true,
+      "imagenes": [
+        "Carl Sagan.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980221-03:00",
+      "notas": ""
+    },
+    "b1214601-2666-400a-9674-bc1f02dc9344": {
+      "id": "b1214601-2666-400a-9674-bc1f02dc9344",
+      "nombre": "Cosmo Kramer",
+      "autorizado": true,
+      "imagenes": [
+        "Cosmo Kramer.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980518-03:00",
+      "notas": ""
+    },
+    "8a22f066-8194-4981-9997-4819cc54268e": {
+      "id": "8a22f066-8194-4981-9997-4819cc54268e",
+      "nombre": "Elaine Benes",
+      "autorizado": true,
+      "imagenes": [
+        "Elaine Benes.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980536-03:00",
+      "notas": ""
+    },
+    "a32e38ec-cbf6-44a7-a04d-1ab6d6ff0dfb": {
+      "id": "a32e38ec-cbf6-44a7-a04d-1ab6d6ff0dfb",
+      "nombre": "George Constanza",
+      "autorizado": true,
+      "imagenes": [
+        "George Constanza.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980547-03:00",
+      "notas": ""
+    },
+    "216a73f1-6ec4-4282-89dd-e0e61106c278": {
+      "id": "216a73f1-6ec4-4282-89dd-e0e61106c278",
+      "nombre": "Jerry Seinfeld",
+      "autorizado": true,
+      "imagenes": [
+        "Jerry Seinfeld.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980557-03:00",
+      "notas": ""
+    },
+    "b3cde8c9-da62-43e6-ad1d-c9ceee2e3c0d": {
+      "id": "b3cde8c9-da62-43e6-ad1d-c9ceee2e3c0d",
+      "nombre": "Michio Kaku",
+      "autorizado": true,
+      "imagenes": [
+        "Michio Kaku.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980567-03:00",
+      "notas": ""
+    },
+    "5c7ef21f-7a1b-4f67-a934-61fb6d385f83": {
+      "id": "5c7ef21f-7a1b-4f67-a934-61fb6d385f83",
+      "nombre": "Neil deGrasse Tyson",
+      "autorizado": true,
+      "imagenes": [
+        "Neil deGrasse Tyson.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980576-03:00",
+      "notas": ""
+    },
+    "a853ebe6-6d88-4d7c-bf23-ff82c57dd38b": {
+      "id": "a853ebe6-6d88-4d7c-bf23-ff82c57dd38b",
+      "nombre": "Pato",
+      "autorizado": true,
+      "imagenes": [
+        "Pato.jpg"
+      ],
+      "fecha_registro": "2026-10-28T15:08:20.980585-03:00",
+      "notas": ""
+    }
+  },
+  "ultima_actualizacion": "2026-10-28T15:08:20.980656-03:00"
+}
