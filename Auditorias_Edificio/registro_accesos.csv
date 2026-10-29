@@ -20,3 +20,11 @@ fecha_hora,residente_id,nombre,resultado,movimiento,distancia,motivo
 2026-10-28T16:11:10-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
 2026-10-28T16:11:43-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
 2026-10-28T16:11:47-03:00,,Juan Bautista Delprato,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-29T12:24:36.538725-03:00,c364861c-754f-4412-a613-cff50e87b1d6,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,0.3767,Residente autorizado identificado por reconocimiento facial.
+2026-10-29T12:24:55.307319-03:00,c364861c-754f-4412-a613-cff50e87b1d6,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,0.4190,Residente autorizado identificado por reconocimiento facial.
+2026-10-29T12:59:27.695484-03:00,c364861c-754f-4412-a613-cff50e87b1d6,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,0.3745,Residente autorizado identificado por reconocimiento facial.
+2026-10-29T13:00:20.427314-03:00,,DESCONOCIDO,PERSONA_DESCONOCIDA,N/A,,Prueba de vida fallida (tiempo límite)
+2026-10-29T13:00:39.322735-03:00,,DESCONOCIDO,PERSONA_DESCONOCIDA,N/A,,Prueba de vida fallida (tiempo límite)
+2026-10-29T13:00:52.615995-03:00,,DESCONOCIDO,PERSONA_DESCONOCIDA,N/A,0.4521,Persona no identificada. La menor distancia fue 0.4521 (umbral: 0.4). No se alcanzó el criterio de coincidencia.
+2026-10-29T13:01:04.281239-03:00,,DESCONOCIDO,PERSONA_DESCONOCIDA,N/A,0.4338,Persona no identificada. La menor distancia fue 0.4338 (umbral: 0.4). No se alcanzó el criterio de coincidencia.
+2026-10-29T13:01:16.310166-03:00,c364861c-754f-4412-a613-cff50e87b1d6,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,0.3993,Residente autorizado identificado por reconocimiento facial.
