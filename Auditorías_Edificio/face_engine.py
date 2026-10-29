@@ -31,14 +31,7 @@ from models import ResultadoIdentificacion, ResultadoVerificacion, Residente
 def validar_archivo_imagen(ruta: str) -> Tuple[bool, str]:
     """
     Valida que un archivo sea una imagen admitida para el sistema.
-
     Comprueba existencia, extensión, tamaño y que pueda cargarse correctamente.
-
-    Args:
-        ruta: Ruta absoluta o relativa al archivo de imagen.
-
-    Returns:
-        Tupla (es_valida, mensaje). Si no es válida, el mensaje explica el motivo.
     """
     if not ruta or not isinstance(ruta, str):
         return False, "La ruta de imagen está vacía o no es válida."
@@ -67,19 +60,8 @@ def validar_archivo_imagen(ruta: str) -> Tuple[bool, str]:
 def cargar_imagen_rgb(ruta: str) -> np.ndarray:
     """
     Carga una imagen desde archivo y la retorna en formato RGB.
-
     Utiliza face_recognition.load_image_file(), que internamente usa Pillow
     y retorna un array numpy en RGB.
-
-    Args:
-        ruta: Ruta al archivo de imagen.
-
-    Returns:
-        Array numpy con la imagen en formato RGB.
-
-    Raises:
-        FileNotFoundError: Si el archivo no existe.
-        ValueError: Si la imagen no puede cargarse o está corrupta.
     """
     import face_recognition as fr
 
@@ -100,16 +82,7 @@ def cargar_imagen_rgb(ruta: str) -> np.ndarray:
 def cargar_imagen_bgr(ruta: str) -> np.ndarray:
     """
     Carga una imagen desde archivo y la retorna en formato BGR (para OpenCV).
-
-    Args:
-        ruta: Ruta al archivo de imagen.
-
-    Returns:
-        Array numpy con la imagen en formato BGR.
-
-    Raises:
-        FileNotFoundError: Si el archivo no existe.
-        ValueError: Si la imagen no puede cargarse.
+    Integra la corrección para rutas con caracteres especiales en Windows.
     """
     import cv2
 
@@ -117,8 +90,10 @@ def cargar_imagen_bgr(ruta: str) -> np.ndarray:
         raise FileNotFoundError(f"No se encontró el archivo de imagen: {ruta}")
 
     # En Windows, cv2.imread no soporta rutas con tildes o caracteres Unicode.
+    # Se leen los bytes con numpy y se decodifican con cv2.imdecode para máxima compatibilidad.
     datos = np.fromfile(ruta, dtype=np.uint8)
     imagen = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
+    
     if imagen is None:
         raise ValueError(f"No se pudo leer la imagen (puede estar corrupta): {ruta}")
 
@@ -143,13 +118,6 @@ def detectar_rostros(
 ) -> List[Tuple[int, int, int, int]]:
     """
     Detecta todos los rostros presentes en una imagen RGB.
-
-    Args:
-        imagen_rgb: Imagen en formato RGB.
-        modelo: Modelo de detección ("hog" o "cnn").
-
-    Returns:
-        Lista de ubicaciones (top, right, bottom, left) de cada rostro detectado.
     """
     import face_recognition as fr
     return fr.face_locations(imagen_rgb, model=modelo)
@@ -161,15 +129,6 @@ def codificar_rostro(
 ) -> Optional[np.ndarray]:
     """
     Extrae el embedding facial (vector de 128 dimensiones) de un rostro.
-
-    Args:
-        imagen_rgb: Imagen en formato RGB.
-        ubicacion: Coordenadas (top, right, bottom, left) del rostro.
-                   Si es None, se detecta automáticamente el primer rostro.
-
-    Returns:
-        Array numpy de 128 dimensiones con el embedding, o None si no se
-        pudo codificar.
     """
     import face_recognition as fr
 
@@ -190,14 +149,6 @@ def codificar_todos_los_rostros(
 ) -> List[np.ndarray]:
     """
     Extrae los embeddings faciales de todos los rostros en una imagen.
-
-    Args:
-        imagen_rgb: Imagen en formato RGB.
-        ubicaciones: Lista de ubicaciones de rostros. Si es None, se detectan
-                     automáticamente.
-
-    Returns:
-        Lista de arrays numpy de 128 dimensiones.
     """
     import face_recognition as fr
 
@@ -212,22 +163,7 @@ def verificar_1a1(
     umbral: float = UMBRAL_DISTANCIA,
 ) -> ResultadoVerificacion:
     """
-    Verificación facial 1:1 — Determina si dos embeddings corresponden
-    a la misma persona.
-
-    La distancia euclidiana entre embeddings de 128 dimensiones se compara
-    contra el umbral configurado. Un valor menor indica mayor similitud.
-
-    NOTA: Este resultado NO es una certeza absoluta de identidad. Es una
-    medida de similitud entre representaciones faciales del modelo.
-
-    Args:
-        encoding_a: Embedding del primer rostro (128D).
-        encoding_b: Embedding del segundo rostro (128D).
-        umbral: Distancia máxima para considerar coincidencia.
-
-    Returns:
-        ResultadoVerificacion con el resultado de la comparación.
+    Verificación facial 1:1 — Determina si dos embeddings corresponden a la misma persona.
     """
     import face_recognition as fr
 
@@ -259,25 +195,7 @@ def identificar_1aN(
     umbral: float = UMBRAL_DISTANCIA,
 ) -> ResultadoIdentificacion:
     """
-    Identificación facial 1:N — Busca a qué residente registrado corresponde
-    un rostro capturado.
-
-    Compara el embedding capturado contra todos los embeddings de la galería
-    y selecciona el candidato con menor distancia, siempre que esté dentro
-    del umbral.
-
-    IMPORTANTE: Encontrar al candidato más parecido NO confirma su identidad.
-    Si ningún candidato está dentro del umbral, el resultado es
-    "persona no identificada".
-
-    Args:
-        encoding_captura: Embedding del rostro capturado (128D).
-        galeria_encodings: Lista de embeddings de residentes registrados.
-        galeria_residentes: Lista de objetos Residente correspondientes.
-        umbral: Distancia máxima para considerar coincidencia.
-
-    Returns:
-        ResultadoIdentificacion con el candidato identificado o no.
+    Identificación facial 1:N — Busca a qué residente registrado corresponde un rostro capturado.
     """
     if not galeria_encodings or not galeria_residentes:
         return ResultadoIdentificacion(
@@ -320,20 +238,6 @@ def detectar_y_codificar_imagen(
 ) -> Tuple[Tuple[int, int, int, int], np.ndarray, np.ndarray]:
     """
     Carga una imagen, detecta el rostro principal y extrae su embedding.
-
-    Función de conveniencia que combina carga, detección y codificación
-    para el caso más común: una imagen con un rostro esperado.
-
-    Args:
-        ruta: Ruta al archivo de imagen.
-        nombre_referencia: Etiqueta para mensajes de error.
-
-    Returns:
-        Tupla (ubicacion_rostro, encoding, imagen_rgb).
-
-    Raises:
-        FileNotFoundError: Si el archivo no existe.
-        ValueError: Si no se detecta un rostro o no se puede codificar.
     """
     valida, msg = validar_archivo_imagen(ruta)
     if not valida:
@@ -364,4 +268,3 @@ def detectar_y_codificar_imagen(
         )
 
     return ubicacion, encoding, imagen_rgb
-

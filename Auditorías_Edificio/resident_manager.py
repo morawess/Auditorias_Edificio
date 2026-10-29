@@ -142,31 +142,17 @@ class ResidenteManager:
     ) -> Tuple[Optional[Residente], str]:
         """
         Registra un nuevo residente con su imagen de referencia.
-
-        Valida la imagen, la copia al directorio de residentes y crea
-        el registro en la base de datos.
-
-        Args:
-            nombre: Nombre completo del residente.
-            ruta_imagen: Ruta a la imagen de referencia.
-            autorizado: Si el residente tiene autorización inicial.
-            notas: Observaciones opcionales.
-
-        Returns:
-            Tupla (Residente, mensaje). Residente es None si falla el registro.
         """
         if not nombre or not nombre.strip():
             return None, "El nombre del residente no puede estar vacío."
 
         nombre = nombre.strip()
 
-        # Validar imagen
         from face_engine import validar_archivo_imagen, cargar_imagen_rgb, detectar_rostros
         valida, msg = validar_archivo_imagen(ruta_imagen)
         if not valida:
             return None, f"Imagen no válida: {msg}"
 
-        # Verificar que la imagen contenga exactamente un rostro
         try:
             imagen_rgb = cargar_imagen_rgb(ruta_imagen)
             ubicaciones = detectar_rostros(imagen_rgb)
@@ -185,12 +171,10 @@ class ResidenteManager:
                 f"La imagen de referencia debe contener un único rostro."
             )
 
-        # Copiar imagen al directorio de residentes con nombre seguro
         ext = os.path.splitext(ruta_imagen)[1]
         nombre_archivo = self._generar_nombre_archivo_seguro(nombre, ext)
         ruta_destino = os.path.join(self.ruta_imagenes, nombre_archivo)
 
-        # No copiar si el origen y destino son el mismo archivo
         ruta_origen_abs = os.path.abspath(ruta_imagen)
         ruta_destino_abs = os.path.abspath(ruta_destino)
         if ruta_origen_abs != ruta_destino_abs:
@@ -199,7 +183,6 @@ class ResidenteManager:
             except OSError as e:
                 return None, f"No se pudo copiar la imagen al directorio de residentes: {e}"
 
-        # Verificar si ya existe un residente con el mismo nombre
         existente = self.buscar_por_nombre(nombre)
         if existente:
             if nombre_archivo not in existente.imagenes:
@@ -210,7 +193,6 @@ class ResidenteManager:
                 f"adicional de referencia ({nombre_archivo})."
             )
 
-        # Crear nuevo residente
         residente = Residente(
             nombre=nombre,
             autorizado=autorizado,
@@ -227,13 +209,6 @@ class ResidenteManager:
     ) -> Tuple[bool, str]:
         """
         Agrega una imagen de referencia adicional a un residente existente.
-
-        Args:
-            residente_id: UUID del residente.
-            ruta_imagen: Ruta a la nueva imagen.
-
-        Returns:
-            Tupla (exito, mensaje).
         """
         residente = self.obtener(residente_id)
         if not residente:
@@ -288,12 +263,6 @@ class ResidenteManager:
     def listar(self, solo_autorizados: bool = False) -> List[Residente]:
         """
         Lista todos los residentes registrados.
-
-        Args:
-            solo_autorizados: Si True, filtra solo los autorizados.
-
-        Returns:
-            Lista de residentes ordenada por nombre.
         """
         residentes = list(self._residentes.values())
         if solo_autorizados:
@@ -305,13 +274,6 @@ class ResidenteManager:
     ) -> Tuple[bool, str]:
         """
         Actualiza el estado de autorización de un residente.
-
-        Args:
-            residente_id: UUID del residente.
-            autorizado: Nuevo estado de autorización.
-
-        Returns:
-            Tupla (exito, mensaje).
         """
         residente = self.obtener(residente_id)
         if not residente:
@@ -330,12 +292,6 @@ class ResidenteManager:
     def eliminar_residente(self, residente_id: str) -> Tuple[bool, str]:
         """
         Elimina un residente y sus imágenes asociadas.
-
-        Args:
-            residente_id: UUID del residente a eliminar.
-
-        Returns:
-            Tupla (exito, mensaje).
         """
         residente = self.obtener(residente_id)
         if not residente:
@@ -343,7 +299,6 @@ class ResidenteManager:
 
         nombre = residente.nombre
 
-        # Eliminar imágenes asociadas
         for img in residente.imagenes:
             ruta_img = os.path.join(self.ruta_imagenes, img)
             if os.path.isfile(ruta_img):
@@ -359,56 +314,57 @@ class ResidenteManager:
 
     def cargar_galeria(self) -> Tuple[List[np.ndarray], List[Residente]]:
         """
-        Carga los embeddings faciales de todos los residentes autorizados
-        con imágenes válidas.
-
-        Returns:
-            Tupla (lista_encodings, lista_residentes) donde cada encoding
-            corresponde al residente en la misma posición.
+        Carga las codificaciones faciales de todos los residentes registrados.
+        Cada codificación queda asociada al objeto Residente correspondiente,
+        independientemente de si está autorizado o no.
         """
-        from face_engine import cargar_imagen_rgb, codificar_rostro, bgr_a_rgb
+        from face_engine import codificar_rostro, bgr_a_rgb
         import cv2
 
         encodings = []
         residentes_validos = []
 
-        for residente in self.listar(solo_autorizados=True):
+        # Listamos sin filtro para cargar a TODOS (Lógica del compañero para auditoría correcta)
+        for residente in self.listar():
             for imagen_nombre in residente.imagenes:
                 ruta = os.path.join(self.ruta_imagenes, imagen_nombre)
+
                 if not os.path.isfile(ruta):
                     print(
-                        f"[ADVERTENCIA] Imagen '{imagen_nombre}' del residente "
-                        f"'{residente.nombre}' no encontrada. Se omitirá."
+                        f"[ADVERTENCIA] No se encontró '{imagen_nombre}' "
+                        f"para el residente '{residente.nombre}'."
                     )
                     continue
 
                 try:
-                    # En Windows, cv2.imread no soporta rutas con tildes o caracteres Unicode.
+                    # Corrección de rutas para Windows con caracteres especiales (Tu lógica)
                     datos = np.fromfile(ruta, dtype=np.uint8)
                     imagen_bgr = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
+                    
                     if imagen_bgr is None:
                         print(
                             f"[ADVERTENCIA] No se pudo leer '{imagen_nombre}'. "
                             f"Se omitirá."
                         )
                         continue
+                        
                     imagen_rgb = bgr_a_rgb(imagen_bgr)
                     encoding = codificar_rostro(imagen_rgb)
 
                     if encoding is None:
                         print(
-                            f"[ADVERTENCIA] No se detectó rostro en la foto "
-                            f"de '{residente.nombre}' ({imagen_nombre}). Se omitirá."
+                            f"[ADVERTENCIA] No se detectó un rostro válido "
+                            f"en '{imagen_nombre}'."
                         )
                         continue
 
                     encodings.append(encoding)
                     residentes_validos.append(residente)
 
-                except Exception as e:
+                except Exception as error:
                     print(
-                        f"[ADVERTENCIA] Error al procesar '{imagen_nombre}' "
-                        f"de '{residente.nombre}': {e}"
+                        f"[ADVERTENCIA] No se pudo procesar "
+                        f"'{imagen_nombre}': {error}"
                     )
 
         return encodings, residentes_validos
@@ -416,21 +372,12 @@ class ResidenteManager:
     def _generar_nombre_archivo_seguro(self, nombre_base: str, extension: str) -> str:
         """
         Genera un nombre de archivo seguro eliminando caracteres problemáticos.
-
-        Args:
-            nombre_base: Nombre base deseado.
-            extension: Extensión del archivo (con punto).
-
-        Returns:
-            Nombre de archivo sanitizado.
         """
-        # Eliminar caracteres peligrosos para el sistema de archivos
         caracteres_prohibidos = '<>:"/\\|?*'
         nombre_limpio = nombre_base
         for c in caracteres_prohibidos:
             nombre_limpio = nombre_limpio.replace(c, "_")
 
-        # Eliminar puntos iniciales (archivos ocultos en Unix)
         nombre_limpio = nombre_limpio.lstrip(".")
 
         if not nombre_limpio:
@@ -438,7 +385,6 @@ class ResidenteManager:
 
         nombre_completo = f"{nombre_limpio}{extension}"
 
-        # Si ya existe, agregar sufijo numérico
         ruta_completa = os.path.join(self.ruta_imagenes, nombre_completo)
         contador = 1
         while os.path.exists(ruta_completa):
@@ -452,13 +398,9 @@ class ResidenteManager:
         """
         Verifica que las imágenes referenciadas en la DB existan en el directorio
         y que las imágenes del directorio estén registradas.
-
-        Returns:
-            Resumen de la sincronización.
         """
         mensajes = []
 
-        # Verificar imágenes referenciadas que ya no existen
         for residente in list(self._residentes.values()):
             imagenes_faltantes = []
             for img in residente.imagenes:
@@ -474,7 +416,6 @@ class ResidenteManager:
                     f"referencia(s) a imágenes inexistentes."
                 )
 
-        # Verificar imágenes en el directorio no asociadas a ningún residente
         if os.path.isdir(self.ruta_imagenes):
             imagenes_registradas = set()
             for r in self._residentes.values():
@@ -491,4 +432,3 @@ class ResidenteManager:
             self._guardar_db()
             return "\n".join(mensajes)
         return "La base de datos está sincronizada con el directorio de imágenes."
-
