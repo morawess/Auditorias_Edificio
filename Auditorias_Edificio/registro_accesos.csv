@@ -1,0 +1,22 @@
+fecha_hora,residente_id,nombre,resultado,movimiento,distancia,motivo
+2026-10-17T22:06:05-03:00,,Michio Kaku,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-17T22:06:58-03:00,,Cosmo Kramer,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:08:39.166574-03:00,,DESCONOCIDO,PERSONA_DESCONOCIDA,N/A,,Acceso denegado: prueba de vida fallida
+2026-10-28T15:08:46.848187-03:00,a853ebe6-6d88-4d7c-bf23-ff82c57dd38b,Pato,ACCESO_AUTORIZADO,ENTRADA,0.4758,Residente autorizado identificado por reconocimiento facial.
+2026-10-28T15:19:03-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:19:18-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:19:34-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:19:53-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:20:09-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:20:24-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:20:51-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T15:21:11.167299-03:00,a853ebe6-6d88-4d7c-bf23-ff82c57dd38b,Pato,ACCESO_AUTORIZADO,SALIDA,0.4415,Residente autorizado identificado por reconocimiento facial.
+2026-10-28T15:26:13.474501-03:00,a853ebe6-6d88-4d7c-bf23-ff82c57dd38b,Pato,ACCESO_AUTORIZADO,ENTRADA,0.4999,Residente autorizado identificado por reconocimiento facial.
+2026-10-28T16:05:12-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:05:15-03:00,,Juan Bautista Delprato,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:09:19-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:09:24-03:00,,Juan Bautista Delprato,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:09:34-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:11:10-03:00,,Mora Wessels,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:11:43-03:00,,Mora Wessels,ACCESO_AUTORIZADO,SALIDA,,Migrado del registro anterior (ACCESO SIN LLAVE)
+2026-10-28T16:11:47-03:00,,Juan Bautista Delprato,ACCESO_AUTORIZADO,ENTRADA,,Migrado del registro anterior (ACCESO SIN LLAVE)

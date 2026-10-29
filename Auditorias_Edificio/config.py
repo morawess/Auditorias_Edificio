@@ -13,8 +13,8 @@ Umbral de distancia (UMBRAL_DISTANCIA):
     - Este valor NO representa un porcentaje de certeza ni una probabilidad de identidad.
 
 IMPORTANTE — Limitaciones de seguridad:
-    Este sistema NO implementa detección de suplantación (anti-spoofing) ni prueba de vida
-    (liveness detection). Una fotografía o video de un residente presentado ante la cámara
+    Este sistema NO implementa detección de suplantación (anti-spoofing).
+    Una fotografía o video de un residente presentado ante la cámara
     podría ser aceptado como válido. Para un despliegue en producción, se requiere integrar
     mecanismos adicionales de verificación.
 """

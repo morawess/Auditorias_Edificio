@@ -1,25 +1,33 @@
 """
-Interfaz Gráfica Unificada: Control de Acceso y Verificación Facial 1:1
-------------------------------------------------------------------------
-Proporciona una interfaz visual, moderna y fácil de usar para:
-1. Control de Acceso y Auditoría en tiempo real mediante Cámara Web (reconocimiento facial de residentes y registro CSV).
-2. Verificación y Comparación Facial 1:1 entre dos imágenes estáticas con umbral configurable y métrica de distancia.
+Interfaz Gráfica Unificada: Control de Acceso, Auditoría y Verificación Facial 1:1
+----------------------------------------------------------------------------------
+Proporciona una interfaz visual, moderna y profesional que combina:
+1. Control de Acceso y Auditoría en tiempo real con Cámara Web:
+   - Reconocimiento biométrico facial 1:N contra la base de residentes.
+   - Modo de alta seguridad: Prueba de Vida (Anti-Spoofing / Liveness) mediante desafíos
+     aleatorios de parpadeo (EAR) y apertura de boca (MAR).
+   - Modo rápido: Detección y acceso continuo con cooldown inteligente.
+   - Historial de auditoría en vivo conectado a EventLogger y archivo CSV.
+2. Verificación y Comparación Facial 1:1 entre dos imágenes con presets y umbral dinámico.
 """
 
+import csv
 import os
 import pickle
-import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Optional, List, Tuple
+from datetime import datetime
+
 from PIL import Image, ImageTk
 import numpy as np
 import cv2
 import face_recognition as fr
 
-# Importar configuraciones y módulos existentes del proyecto
+# Importar arquitectura modular del sistema
 from config import (
     DIRECTORIO_BASE,
     DIRECTORIO_RESIDENTES,
@@ -30,12 +38,16 @@ from config import (
 )
 import control_acceso_residentes as car
 import face_engine as motor
+from resident_manager import ResidenteManager
+from event_logger import EventLogger
+from access_control import AccessController
+from liveness import PruebaVida
+from models import ResultadoAcceso, TipoMovimiento
 
 ARCHIVO_REGISTRO_CSV = ARCHIVO_REGISTRO_EVENTOS
 
-# Bloqueo de concurrencia para operaciones de dlib / face_recognition
+# Bloqueo de concurrencia para llamadas a dlib / face_recognition
 dlib_lock = threading.Lock()
-
 
 
 def cargar_imagen_segura_rgb(ruta: str) -> Optional[np.ndarray]:
@@ -55,33 +67,45 @@ def cargar_imagen_segura_rgb(ruta: str) -> Optional[np.ndarray]:
 class AppControlAccesoGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Control de Acceso y Verificación Facial — Edificio")
+        self.root.title("Control de Acceso Facial y Auditoría — Edificio")
 
-        # Ajuste dinámico de dimensiones adaptado a pantallas de laptops (ej. 1366x768)
+        # Ajuste dinámico de dimensiones adaptado a pantallas de laptop y escritorio
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        ancho = min(1140, max(850, sw - 50))
-        alto = min(660, max(480, sh - 90))
+        ancho = min(1160, max(880, sw - 50))
+        alto = min(680, max(500, sh - 90))
         x = max(0, (sw - ancho) // 2)
         y = max(10, (sh - alto - 50) // 2)
         self.root.geometry(f"{ancho}x{alto}+{x}+{y}")
-        self.root.minsize(900, 480)
+        self.root.minsize(920, 500)
         self.root.configure(bg="#0f172a")
+
+        # Gestores del sistema
+        self.residente_manager = ResidenteManager()
+        self.event_logger = EventLogger(ARCHIVO_REGISTRO_CSV)
+        self.access_controller = AccessController(
+            event_logger=self.event_logger,
+            tiempo_cooldown=TIEMPO_ENTRE_REGISTROS_SEG,
+        )
 
         # Estado del módulo de cámara y acceso
         self.captura: Optional[cv2.VideoCapture] = None
         self.camara_activa = False
         self.frame_count = 0
         self.ultimas_caras: List[Tuple] = []
-        self.ultimas_etiquetas: List[Tuple[str, bool, float]] = []
-        self.ultimos_registros: dict = {}
+        self.ultimas_etiquetas: List[Tuple[str, Optional[bool], float]] = []
 
-        # Base de residentes
-        self.imagenes_residentes = []
-        self.nombres_residentes = []
-        self.lista_codificada = []
-        self.nombres_validos = []
+        # Estado de Prueba de Vida (Liveness)
+        self.prueba_vida: Optional[PruebaVida] = None
+        self.esperando_retirada = False
+        self.mensaje_resultado_vida: Optional[str] = None
+        self.color_resultado_vida = (255, 255, 255)
+        self.mostrar_resultado_hasta = 0.0
+
+        # Galería de residentes cargada
+        self.galeria_encodings: List[np.ndarray] = []
+        self.galeria_residentes: list = []
 
         # Estado del módulo 1:1
         self.ruta_img_a: Optional[str] = None
@@ -102,7 +126,7 @@ class AppControlAccesoGUI:
         # Protocolo de cierre seguro
         self.root.protocol("WM_DELETE_WINDOW", self._al_cerrar)
 
-        # Cargar base de residentes en un hilo para no bloquear la interfaz inicial
+        # Cargar base de residentes en hilo secundario
         self.root.after(100, self._iniciar_carga_residentes)
 
     def _configurar_estilos(self):
@@ -112,7 +136,7 @@ class AppControlAccesoGUI:
         except Exception:
             pass
 
-        # Notebook (Pestañas)
+        # Pestañas (Notebook)
         style.configure(
             "TNotebook",
             background="#0f172a",
@@ -133,7 +157,7 @@ class AppControlAccesoGUI:
             foreground=[("selected", "#ffffff")],
         )
 
-        # Treeview (Tabla de auditoría)
+        # Tabla Treeview (Auditoría)
         style.configure(
             "Treeview",
             background="#1e293b",
@@ -181,7 +205,7 @@ class AppControlAccesoGUI:
 
         lbl_tit = tk.Label(
             titulo_box,
-            text="SISTEMA DE ACCESO Y AUDITORÍA RESIDENCIAL",
+            text="SISTEMA DE CONTROL DE ACCESO Y AUDITORÍA RESIDENCIAL",
             font=("Segoe UI", 12, "bold"),
             bg="#1e293b",
             fg="#f8fafc",
@@ -190,7 +214,7 @@ class AppControlAccesoGUI:
 
         lbl_sub = tk.Label(
             titulo_box,
-            text="Control biométrico facial en tiempo real y verificación de identidad 1:1",
+            text="Biometría facial en tiempo real, detección de vida (anti-spoofing) y auditoría 1:1",
             font=("Segoe UI", 9),
             bg="#1e293b",
             fg="#94a3b8",
@@ -212,7 +236,7 @@ class AppControlAccesoGUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-        # Pestaña 1: Cámara y Control de Acceso
+        # Pestaña 1: Control de Acceso en Vivo
         self.tab_camara = tk.Frame(self.notebook, bg="#0f172a")
         self.notebook.add(self.tab_camara, text="  Control de Acceso en Vivo (Cámara)  ")
         self._construir_tab_camara()
@@ -229,11 +253,11 @@ class AppControlAccesoGUI:
         panel_principal = tk.Frame(self.tab_camara, bg="#0f172a")
         panel_principal.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        # Columna Izquierda: Video en vivo y controles de cámara
+        # Columna Izquierda: Video en vivo y controles
         col_video = tk.Frame(panel_principal, bg="#0f172a")
         col_video.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
 
-        # Barra de Controles de Cámara (siempre visible ARRIBA del video)
+        # Barra de Controles de Cámara (ARRIBA del visor)
         controles_cam = tk.Frame(col_video, bg="#1e293b", pady=8, padx=10, bd=1, relief="solid")
         controles_cam.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
 
@@ -251,7 +275,7 @@ class AppControlAccesoGUI:
             cursor="hand2",
             command=self._toggle_camara,
         )
-        self.btn_toggle_cam.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_toggle_cam.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_captura_unica = tk.Button(
             controles_cam,
@@ -267,7 +291,7 @@ class AppControlAccesoGUI:
             cursor="hand2",
             command=self._ejecutar_captura_unica,
         )
-        self.btn_captura_unica.pack(side=tk.LEFT, padx=(0, 15))
+        self.btn_captura_unica.pack(side=tk.LEFT, padx=(0, 12))
 
         # Selector de índice de cámara
         tk.Label(
@@ -286,7 +310,7 @@ class AppControlAccesoGUI:
             width=3,
             textvariable=self.var_cam_index,
         )
-        spin_cam.pack(side=tk.LEFT, padx=(0, 15))
+        spin_cam.pack(side=tk.LEFT, padx=(0, 12))
 
         # Slider de Umbral
         tk.Label(
@@ -297,29 +321,46 @@ class AppControlAccesoGUI:
             font=("Segoe UI", 9),
         ).pack(side=tk.LEFT, padx=(0, 4))
 
-        self.var_umbral_cam = tk.DoubleVar(value=0.60)
+        self.var_umbral_cam = tk.DoubleVar(value=UMBRAL_DISTANCIA)
         slider_umbral = ttk.Scale(
             controles_cam,
             from_=0.40,
             to=0.75,
             variable=self.var_umbral_cam,
             orient=tk.HORIZONTAL,
-            length=100,
+            length=90,
             command=lambda v: self.lbl_val_umbral_cam.config(text=f"{float(v):.2f}"),
         )
-        slider_umbral.pack(side=tk.LEFT, padx=(0, 6))
+        slider_umbral.pack(side=tk.LEFT, padx=(0, 4))
 
         self.lbl_val_umbral_cam = tk.Label(
             controles_cam,
-            text="0.60",
+            text=f"{UMBRAL_DISTANCIA:.2f}",
             bg="#1e293b",
             fg="#60a5fa",
             font=("Segoe UI", 9, "bold"),
             width=4,
         )
-        self.lbl_val_umbral_cam.pack(side=tk.LEFT)
+        self.lbl_val_umbral_cam.pack(side=tk.LEFT, padx=(0, 14))
 
-        # Marco del visor de video (debajo de los controles)
+        # Checkbox para activar / desactivar Prueba de Vida (Liveness Anti-Spoofing)
+        self.var_prueba_vida = tk.BooleanVar(value=True)
+        chk_vida = tk.Checkbutton(
+            controles_cam,
+            text="Prueba de Vida (Anti-Spoofing)",
+            variable=self.var_prueba_vida,
+            bg="#1e293b",
+            fg="#38bdf8",
+            activebackground="#1e293b",
+            activeforeground="#38bdf8",
+            selectcolor="#0f172a",
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            command=self._al_cambiar_modo_vida,
+        )
+        chk_vida.pack(side=tk.LEFT)
+
+        # Marco del visor de video
         visor_card = tk.Frame(col_video, bg="#1e293b", bd=1, relief="solid")
         visor_card.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -333,7 +374,7 @@ class AppControlAccesoGUI:
         self.root.after(100, lambda: self._dibujar_placeholder_camara("Cámara inactiva\nPresione 'Iniciar Cámara' para comenzar"))
 
         # Columna Derecha: Tarjeta de Estado y Tabla de Auditoría
-        col_derecha = tk.Frame(panel_principal, bg="#0f172a", width=380)
+        col_derecha = tk.Frame(panel_principal, bg="#0f172a", width=390)
         col_derecha.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(8, 0))
         col_derecha.pack_propagate(False)
 
@@ -353,14 +394,15 @@ class AppControlAccesoGUI:
         self.badge_estado = tk.Label(
             card_estado,
             text="EN ESPERA DE ROSTRO",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             bg="#334155",
             fg="#f8fafc",
             pady=8,
+            wraplength=360,
         )
         self.badge_estado.pack(fill=tk.X, pady=(0, 8))
 
-        # Detalles del residente
+        # Detalles del residente y prueba de vida
         grid_detalles = tk.Frame(card_estado, bg="#1e293b")
         grid_detalles.pack(fill=tk.X)
 
@@ -375,6 +417,10 @@ class AppControlAccesoGUI:
         tk.Label(grid_detalles, text="Distancia:", font=("Segoe UI", 9), bg="#1e293b", fg="#94a3b8").grid(row=2, column=0, sticky="w", pady=2)
         self.lbl_dist_det = tk.Label(grid_detalles, text="—", font=("Segoe UI", 10, "bold"), bg="#1e293b", fg="#ffffff")
         self.lbl_dist_det.grid(row=2, column=1, sticky="w", padx=6, pady=2)
+
+        tk.Label(grid_detalles, text="Seguridad:", font=("Segoe UI", 9), bg="#1e293b", fg="#94a3b8").grid(row=3, column=0, sticky="w", pady=2)
+        self.lbl_vida_det = tk.Label(grid_detalles, text="Prueba de Vida Activa", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg="#38bdf8")
+        self.lbl_vida_det.grid(row=3, column=1, sticky="w", padx=6, pady=2)
 
         # Tarjeta 2: Registro de Auditoría (CSV)
         card_audit = tk.Frame(col_derecha, bg="#1e293b", bd=1, relief="solid", padx=10, pady=10)
@@ -405,7 +451,7 @@ class AppControlAccesoGUI:
         )
         btn_refrescar_csv.pack(side=tk.RIGHT)
 
-        # Botón inferior para abrir el archivo CSV externo (siempre visible abajo)
+        # Botón inferior para abrir archivo CSV externo
         btn_abrir_csv = tk.Button(
             card_audit,
             text="Abrir archivo CSV (registro_accesos.csv)",
@@ -425,7 +471,7 @@ class AppControlAccesoGUI:
         tree_frame = tk.Frame(card_audit, bg="#1e293b")
         tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        columnas = ("fecha", "hora", "residente", "movimiento")
+        columnas = ("fecha", "hora", "residente", "movimiento", "estado")
         self.tree_auditoria = ttk.Treeview(
             tree_frame,
             columns=columnas,
@@ -436,12 +482,14 @@ class AppControlAccesoGUI:
         self.tree_auditoria.heading("fecha", text="Fecha")
         self.tree_auditoria.heading("hora", text="Hora")
         self.tree_auditoria.heading("residente", text="Residente")
-        self.tree_auditoria.heading("movimiento", text="Movimiento")
+        self.tree_auditoria.heading("movimiento", text="Mov.")
+        self.tree_auditoria.heading("estado", text="Resultado")
 
-        self.tree_auditoria.column("fecha", width=78, anchor="center")
-        self.tree_auditoria.column("hora", width=68, anchor="center")
-        self.tree_auditoria.column("residente", width=130, anchor="w")
-        self.tree_auditoria.column("movimiento", width=90, anchor="center")
+        self.tree_auditoria.column("fecha", width=74, anchor="center")
+        self.tree_auditoria.column("hora", width=62, anchor="center")
+        self.tree_auditoria.column("residente", width=120, anchor="w")
+        self.tree_auditoria.column("movimiento", width=60, anchor="center")
+        self.tree_auditoria.column("estado", width=74, anchor="center")
 
         scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree_auditoria.yview)
         self.tree_auditoria.configure(yscrollcommand=scroll_y.set)
@@ -449,10 +497,11 @@ class AppControlAccesoGUI:
         self.tree_auditoria.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.tree_auditoria.tag_configure("ENTRADA", foreground="#34d399")
+        self.tree_auditoria.tag_configure("AUTORIZADO", foreground="#34d399")
         self.tree_auditoria.tag_configure("SALIDA", foreground="#60a5fa")
+        self.tree_auditoria.tag_configure("DENEGADO", foreground="#f87171")
 
-        # Cargar historial CSV existente
+        # Cargar historial CSV inicial
         self._cargar_historial_csv()
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -488,7 +537,6 @@ class AppControlAccesoGUI:
         card_control_comp = tk.Frame(panel_comp, bg="#1e293b", bd=1, relief="solid", padx=15, pady=12)
         card_control_comp.pack(fill=tk.X, pady=(10, 0))
 
-        # Controles
         fila_ctrl = tk.Frame(card_control_comp, bg="#1e293b")
         fila_ctrl.pack(fill=tk.X)
 
@@ -541,7 +589,7 @@ class AppControlAccesoGUI:
         # Banner de Resultado 1:1
         self.banner_resultado_1a1 = tk.Label(
             card_control_comp,
-            text="Seleccione las dos imágenes y presione 'Comparar Rostros 1:1'",
+            text="Seleccione dos imágenes y presione 'Comparar Rostros 1:1'",
             font=("Segoe UI", 12, "bold"),
             bg="#334155",
             fg="#f8fafc",
@@ -549,7 +597,6 @@ class AppControlAccesoGUI:
         )
         self.banner_resultado_1a1.pack(fill=tk.X, pady=(12, 6))
 
-        # Detalle de la métrica
         self.lbl_metrica_1a1 = tk.Label(
             card_control_comp,
             text="Distancia: — | Menor a umbral indica coincidencia (misma identidad)",
@@ -565,7 +612,6 @@ class AppControlAccesoGUI:
     def _crear_tarjeta_imagen(self, padre, titulo: str, lado: str, preset_default: str):
         card = tk.Frame(padre, bg="#1e293b", bd=1, relief="solid", padx=10, pady=8)
 
-        # Header de la tarjeta
         header = tk.Frame(card, bg="#1e293b")
         header.pack(fill=tk.X, pady=(0, 6))
 
@@ -593,7 +639,6 @@ class AppControlAccesoGUI:
         else:
             self.lbl_estado_foto_b = lbl_estado_foto
 
-        # Visor de la foto
         canvas_foto = tk.Canvas(card, bg="#020617", highlightthickness=0, height=270)
         canvas_foto.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
@@ -602,7 +647,6 @@ class AppControlAccesoGUI:
         else:
             self.canvas_foto_b = canvas_foto
 
-        # Barra de selección
         barra_sel = tk.Frame(card, bg="#1e293b")
         barra_sel.pack(fill=tk.X)
 
@@ -622,7 +666,6 @@ class AppControlAccesoGUI:
         )
         btn_examinar.pack(side=tk.LEFT, padx=(0, 8))
 
-        # Botones Presets
         tk.Label(barra_sel, text="Presets:", font=("Segoe UI", 8), bg="#1e293b", fg="#94a3b8").pack(side=tk.LEFT, padx=(0, 4))
         for p in ("FotoA.jpg", "FotoB.jpg", "FotoC.jpg"):
             btn_p = tk.Button(
@@ -659,7 +702,7 @@ class AppControlAccesoGUI:
         return card
 
     # ──────────────────────────────────────────────────────────────────────────
-    # MÉTODOS DE LA BASE DE DATOS DE RESIDENTES
+    # CARGA DE RESIDENTES Y CACHÉ BIOMÉTRICO
     # ──────────────────────────────────────────────────────────────────────────
     def _iniciar_carga_residentes(self):
         hilo = threading.Thread(target=self._tarea_cargar_residentes, daemon=True)
@@ -681,39 +724,47 @@ class AppControlAccesoGUI:
                 except Exception:
                     cache = {}
 
-            archivos_residentes = sorted([
-                f for f in os.listdir(DIRECTORIO_RESIDENTES)
-                if f.lower().endswith(EXTENSIONES_IMAGEN_VALIDAS)
-            ])
-
             cache_mtimes = cache.get("mtimes", {})
             cache_encodings = cache.get("encodings_map", {})
 
+            # Obtener residentes de la base
+            residentes = self.residente_manager.listar()
+            encodings = []
+            residentes_validos = []
             necesita_guardar = False
             encodings_actuales = {}
 
-            for archivo in archivos_residentes:
-                ruta = os.path.join(DIRECTORIO_RESIDENTES, archivo)
-                mtime = os.path.getmtime(ruta)
-                if archivo in cache_encodings and cache_mtimes.get(archivo) == mtime:
-                    encodings_actuales[archivo] = cache_encodings[archivo]
-                else:
-                    necesita_guardar = True
-                    with dlib_lock:
-                        img_rgb = cargar_imagen_segura_rgb(ruta)
-                        if img_rgb is not None:
-                            locs = fr.face_locations(img_rgb)
-                            if locs:
-                                enc = fr.face_encodings(img_rgb, locs)[0]
-                                nombre_res = os.path.splitext(archivo)[0]
-                                encodings_actuales[archivo] = (nombre_res, enc)
+            for res in residentes:
+                for img_nombre in res.imagenes:
+                    ruta = os.path.join(DIRECTORIO_RESIDENTES, img_nombre)
+                    if not os.path.isfile(ruta):
+                        continue
 
-            if necesita_guardar or len(cache_mtimes) != len(archivos_residentes):
+                    mtime = os.path.getmtime(ruta)
+                    if img_nombre in cache_encodings and cache_mtimes.get(img_nombre) == mtime:
+                        enc = cache_encodings[img_nombre]
+                        encodings_actuales[img_nombre] = enc
+                        encodings.append(enc)
+                        residentes_validos.append(res)
+                    else:
+                        necesita_guardar = True
+                        with dlib_lock:
+                            img_rgb = cargar_imagen_segura_rgb(ruta)
+                            if img_rgb is not None:
+                                locs = fr.face_locations(img_rgb)
+                                if locs:
+                                    enc = fr.face_encodings(img_rgb, locs)[0]
+                                    encodings_actuales[img_nombre] = enc
+                                    encodings.append(enc)
+                                    residentes_validos.append(res)
+
+            if necesita_guardar:
                 nuevo_cache = {
                     "encodings_map": encodings_actuales,
                     "mtimes": {
-                        f: os.path.getmtime(os.path.join(DIRECTORIO_RESIDENTES, f))
-                        for f in archivos_residentes
+                        img: os.path.getmtime(os.path.join(DIRECTORIO_RESIDENTES, img))
+                        for img in encodings_actuales
+                        if os.path.isfile(os.path.join(DIRECTORIO_RESIDENTES, img))
                     },
                 }
                 try:
@@ -722,20 +773,20 @@ class AppControlAccesoGUI:
                 except Exception:
                     pass
 
-            self.nombres_validos = [val[0] for val in encodings_actuales.values()]
-            self.lista_codificada = [val[1] for val in encodings_actuales.values()]
+            self.galeria_encodings = encodings
+            self.galeria_residentes = residentes_validos
 
             def actualizar_ui():
-                total = len(self.nombres_validos)
+                total = len(self.galeria_residentes)
                 self.lbl_estado_bd.config(
                     text=f"{total} Residentes Activos",
                     fg="#34d399",
                 )
-                # Iniciar la cámara web automáticamente al completar la carga
                 if not self.camara_activa:
                     self.root.after(300, self._iniciar_camara)
 
             self.root.after(0, actualizar_ui)
+
         except Exception as e:
             def mostrar_error():
                 self.lbl_estado_bd.config(text="Error al cargar residentes", fg="#ef4444")
@@ -744,15 +795,21 @@ class AppControlAccesoGUI:
             self.root.after(0, mostrar_error)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # MÉTODOS DE CÁMARA WEB (TAB 1)
+    # MÉTODOS DE CÁMARA WEB Y PROCESAMIENTO (TAB 1)
     # ──────────────────────────────────────────────────────────────────────────
+    def _al_cambiar_modo_vida(self):
+        activo = self.var_prueba_vida.get()
+        self.prueba_vida = None
+        self.esperando_retirada = False
+        if activo:
+            self.lbl_vida_det.config(text="Prueba de Vida Activa", fg="#38bdf8")
+        else:
+            self.lbl_vida_det.config(text="Modo Rápido (Sin desafío)", fg="#94a3b8")
+
     def _dibujar_placeholder_camara(self, texto: str):
         self.canvas_video.delete("all")
-        w = self.canvas_video.winfo_width()
-        h = self.canvas_video.winfo_height()
-        if w <= 10 or h <= 10:
-            w = 640
-            h = 420
+        w = self.canvas_video.winfo_width() or 640
+        h = self.canvas_video.winfo_height() or 420
         self.canvas_video.create_rectangle(0, 0, w, h, fill="#020617", outline="")
         self.canvas_video.create_text(
             w // 2,
@@ -781,7 +838,7 @@ class AppControlAccesoGUI:
             self._iniciar_camara()
 
     def _iniciar_camara(self):
-        if not self.lista_codificada:
+        if not self.galeria_encodings:
             messagebox.showwarning(
                 "Base no lista",
                 "Aguarde a que finalice la carga de los residentes antes de activar la cámara.",
@@ -843,23 +900,142 @@ class AppControlAccesoGUI:
 
         self.frame_count += 1
 
-        # Ejecutar reconocimiento biométrico cada 3 fotogramas con reducción 0.5x
-        if self.frame_count % 3 == 0:
-            self._procesar_reconocimiento_fotograma(frame)
+        # Si Prueba de Vida está activada, procesar con lógica de liveness
+        if self.var_prueba_vida.get():
+            self._procesar_camara_con_liveness(frame)
+        else:
+            # Modo rápido continuo
+            if self.frame_count % 3 == 0:
+                self._procesar_camara_modo_rapido(frame)
+            self._dibujar_overlays_fotograma(frame)
 
-        # Dibujar las detecciones sobre el fotograma actual
-        self._dibujar_overlays_fotograma(frame)
-
-        # Mostrar fotograma en el Canvas
         self._mostrar_frame_en_canvas(frame)
-
-        # Programar siguiente ciclo (~30 FPS)
         self.root.after(25, self._loop_camara)
 
-    def _procesar_reconocimiento_fotograma(self, frame: np.ndarray):
+    def _procesar_camara_con_liveness(self, frame: np.ndarray):
+        """Flujo de verificación con desafío de vida (EAR/MAR)."""
         umbral = self.var_umbral_cam.get()
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Escalar a la mitad para mayor fluidez
+        with dlib_lock:
+            ubicaciones = fr.face_locations(frame_rgb, model="hog")
+
+        # 1. Esperando retirada tras mostrar un resultado
+        if self.esperando_retirada:
+            self._dibujar_cajas_simples(frame, ubicaciones, self.color_resultado_vida)
+
+            if time.monotonic() < self.mostrar_resultado_hasta:
+                if self.mensaje_resultado_vida:
+                    self._dibujar_hud_camara(frame, self.mensaje_resultado_vida, self.color_resultado_vida, 45)
+            else:
+                self._dibujar_hud_camara(frame, "Retírese para el siguiente acceso", (0, 220, 255), 45)
+                if not ubicaciones:
+                    self.esperando_retirada = False
+                    self.prueba_vida = None
+                    self.mensaje_resultado_vida = None
+            return
+
+        # 2. Sin rostros en el fotograma
+        if not ubicaciones:
+            self.prueba_vida = None
+            self.badge_estado.config(text="EN ESPERA DE ROSTRO", bg="#1e293b", fg="#94a3b8")
+            self._dibujar_hud_camara(frame, "Esperando una persona...", (200, 200, 200), 45)
+            return
+
+        # 3. Más de una persona
+        if len(ubicaciones) > 1:
+            self.prueba_vida = None
+            self._dibujar_cajas_simples(frame, ubicaciones, (0, 0, 220))
+            self.badge_estado.config(text="SOLO UNA PERSONA", bg="#7f1d1d", fg="#fca5a5")
+            self._dibujar_hud_camara(frame, "Debe haber una sola persona frente a la cámara", (0, 0, 255), 45)
+            return
+
+        # 4. Una persona detectada: Iniciar o continuar desafío
+        if self.prueba_vida is None:
+            self.prueba_vida = PruebaVida()
+
+        estado_texto, caras_vida, ear, mar = self.prueba_vida.evaluar(frame)
+        self._dibujar_cajas_simples(frame, caras_vida, (0, 165, 255))
+
+        instruccion = self.prueba_vida.obtener_instruccion()
+        self._dibujar_hud_camara(frame, instruccion, (0, 220, 255), 40)
+        self._dibujar_hud_camara(frame, estado_texto, (255, 255, 255), 70)
+
+        y_offset = 100
+        if ear is not None:
+            self._dibujar_hud_camara(frame, f"EAR (Ojos): {ear:.3f}", (255, 255, 255), y_offset)
+            y_offset += 25
+        if mar is not None:
+            self._dibujar_hud_camara(frame, f"MAR (Boca): {mar:.3f}", (255, 255, 255), y_offset)
+
+        self.badge_estado.config(
+            text=f"PRUEBA DE VIDA: {instruccion.upper()}",
+            bg="#b45309",
+            fg="#fef3c7",
+        )
+
+        # Desafío superado: identificar biométricamente
+        if self.prueba_vida.superada:
+            with dlib_lock:
+                encoding = fr.face_encodings(frame_rgb, ubicaciones)
+
+            if not encoding:
+                self.mensaje_resultado_vida = "No se pudo codificar el rostro"
+                self.color_resultado_vida = (0, 0, 220)
+                self.badge_estado.config(text=self.mensaje_resultado_vida, bg="#7f1d1d", fg="#fca5a5")
+            else:
+                resultado = motor.identificar_1aN(
+                    encoding[0],
+                    self.galeria_encodings,
+                    self.galeria_residentes,
+                    umbral=umbral,
+                )
+                autorizado, mensaje, evento = self.access_controller.procesar_identificacion(resultado)
+
+                if autorizado and resultado.residente:
+                    movimiento = evento.movimiento if evento else "ACCESO"
+                    nombre = resultado.residente.nombre
+                    self.color_resultado_vida = (0, 200, 0)
+                    self.mensaje_resultado_vida = f"AUTORIZADO: {nombre} ({movimiento})"
+                    self.badge_estado.config(
+                        text=f"ACCESO AUTORIZADO — {nombre} ({movimiento})",
+                        bg="#065f46",
+                        fg="#34d399",
+                    )
+                    self.lbl_nombre_det.config(text=nombre, fg="#34d399")
+                    self.lbl_mov_det.config(text=movimiento, fg="#60a5fa")
+                    self.lbl_dist_det.config(text=f"{resultado.distancia:.3f} (Umbral: {umbral:.2f})", fg="#ffffff")
+                else:
+                    self.color_resultado_vida = (0, 0, 220)
+                    nombre = resultado.residente.nombre if (resultado.identificado and resultado.residente) else "Desconocido"
+                    motivo = "No autorizado" if resultado.identificado else "No registrado"
+                    self.mensaje_resultado_vida = f"DENEGADO: {nombre} ({motivo})"
+                    self.badge_estado.config(
+                        text=f"ACCESO DENEGADO ({motivo.upper()})",
+                        bg="#7f1d1d",
+                        fg="#fca5a5",
+                    )
+                    self.lbl_nombre_det.config(text=nombre, fg="#f87171")
+                    self.lbl_mov_det.config(text="Bloqueado", fg="#f87171")
+                    self.lbl_dist_det.config(text=f"{resultado.distancia:.3f} > {umbral:.2f}", fg="#f87171")
+
+                self._cargar_historial_csv()
+
+            self.mostrar_resultado_hasta = time.monotonic() + 3.0
+            self.esperando_retirada = True
+
+        elif self.prueba_vida.fallida:
+            self.color_resultado_vida = (0, 0, 220)
+            self.mensaje_resultado_vida = "DENEGADO: Prueba de vida agotada"
+            self.badge_estado.config(text="PRUEBA DE VIDA FALLIDA", bg="#7f1d1d", fg="#fca5a5")
+            self.event_logger.registrar_acceso_denegado(motivo="Prueba de vida fallida (tiempo límite)")
+            self._cargar_historial_csv()
+            self.mostrar_resultado_hasta = time.monotonic() + 3.0
+            self.esperando_retirada = True
+
+    def _procesar_camara_modo_rapido(self, frame: np.ndarray):
+        """Modo rápido continuo: sin desafío de vida."""
+        umbral = self.var_umbral_cam.get()
         pequeno = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
         rgb_pequeno = cv2.cvtColor(pequeno, cv2.COLOR_BGR2RGB)
 
@@ -879,73 +1055,67 @@ class AppControlAccesoGUI:
             return
 
         for codif, ubic in zip(caras_codificaciones, caras_ubicaciones):
-            # Escalar coordenadas de regreso al tamaño original
             arriba, derecha, abajo, izquierda = [v * 2 for v in ubic]
             self.ultimas_caras.append((arriba, derecha, abajo, izquierda))
 
-            distancias = fr.face_distance(self.lista_codificada, codif)
-            indice_min = int(np.argmin(distancias))
-            distancia_min = float(distancias[indice_min])
+            resultado = motor.identificar_1aN(
+                codif,
+                self.galeria_encodings,
+                self.galeria_residentes,
+                umbral=umbral,
+            )
 
-            if distancia_min <= umbral:
-                nombre = self.nombres_validos[indice_min]
-                ahora_ts = time.time()
-                ultimo_ts = self.ultimos_registros.get(nombre, 0.0)
+            autorizado, mensaje, evento = self.access_controller.procesar_identificacion(resultado)
 
-                if (ahora_ts - ultimo_ts) >= TIEMPO_ENTRE_REGISTROS_SEG:
-                    movimiento = car.registrar_acceso_auditoria(nombre)
-                    self.ultimos_registros[nombre] = ahora_ts
-                    self._cargar_historial_csv()
-                else:
-                    movimiento = car.determinar_siguiente_movimiento(nombre, ARCHIVO_REGISTRO_CSV)
-                    movimiento = "SALIDA" if movimiento == "ENTRADA" else "ENTRADA"
+            if autorizado and resultado.residente:
+                nombre = resultado.residente.nombre
+                movimiento = car.determinar_siguiente_movimiento(nombre)
+                self.ultimas_etiquetas.append((f"{nombre} ({movimiento})", True, resultado.distancia))
 
-                self.ultimas_etiquetas.append((f"{nombre} ({movimiento})", True, distancia_min))
-
-                # Actualizar tarjeta de estado visual
                 self.badge_estado.config(
-                    text=f"ACCESO AUTORIZADO — {movimiento}",
+                    text=f"ACCESO AUTORIZADO — {nombre} ({movimiento})",
                     bg="#065f46",
                     fg="#34d399",
                 )
                 self.lbl_nombre_det.config(text=nombre, fg="#34d399")
                 self.lbl_mov_det.config(text=movimiento, fg="#60a5fa")
-                self.lbl_dist_det.config(
-                    text=f"{distancia_min:.3f} (Umbral: {umbral:.2f})",
-                    fg="#ffffff",
-                )
+                self.lbl_dist_det.config(text=f"{resultado.distancia:.3f} (Umbral: {umbral:.2f})", fg="#ffffff")
+                if evento:
+                    self._cargar_historial_csv()
             else:
-                self.ultimas_etiquetas.append(("ACCESO DENEGADO", False, distancia_min))
+                nombre = resultado.residente.nombre if (resultado.identificado and resultado.residente) else "Desconocido"
+                self.ultimas_etiquetas.append((f"DENEGADO ({nombre})", False, resultado.distancia))
                 self.badge_estado.config(
-                    text="ACCESO DENEGADO (NO REGISTRADO)",
+                    text="ACCESO DENEGADO (NO AUTORIZADO)",
                     bg="#7f1d1d",
                     fg="#f87171",
                 )
-                self.lbl_nombre_det.config(text="Desconocido", fg="#f87171")
+                self.lbl_nombre_det.config(text=nombre, fg="#f87171")
                 self.lbl_mov_det.config(text="Bloqueado", fg="#f87171")
-                self.lbl_dist_det.config(
-                    text=f"{distancia_min:.3f} > {umbral:.2f}",
-                    fg="#f87171",
-                )
+                self.lbl_dist_det.config(text=f"{resultado.distancia:.3f} > {umbral:.2f}", fg="#f87171")
+
+    def _dibujar_hud_camara(self, frame: np.ndarray, texto: str, color=(255, 255, 255), y=35):
+        cv2.putText(
+            frame,
+            texto,
+            (15, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    def _dibujar_cajas_simples(self, frame: np.ndarray, ubicaciones: List[Tuple], color=(0, 220, 255)):
+        for arriba, derecha, abajo, izquierda in ubicaciones:
+            cv2.rectangle(frame, (izquierda, arriba), (derecha, abajo), color, 2)
 
     def _dibujar_overlays_fotograma(self, frame: np.ndarray):
         for ubic, (etiqueta, autorizado, dist) in zip(self.ultimas_caras, self.ultimas_etiquetas):
             arriba, derecha, abajo, izquierda = ubic
             color = (0, 200, 0) if autorizado else (0, 0, 220)
-
-            # Recuadro alrededor de la cara
             cv2.rectangle(frame, (izquierda, arriba), (derecha, abajo), color, 2)
-
-            # Fondo para el texto
-            cv2.rectangle(
-                frame,
-                (izquierda, abajo - 32),
-                (derecha, abajo),
-                color,
-                cv2.FILLED,
-            )
-
-            # Texto con nombre / estado
+            cv2.rectangle(frame, (izquierda, abajo - 32), (derecha, abajo), color, cv2.FILLED)
             cv2.putText(
                 frame,
                 etiqueta,
@@ -958,11 +1128,8 @@ class AppControlAccesoGUI:
             )
 
     def _mostrar_frame_en_canvas(self, frame: np.ndarray):
-        cw = self.canvas_video.winfo_width()
-        ch = self.canvas_video.winfo_height()
-
-        if cw <= 1 or ch <= 1:
-            cw, ch = 640, 480
+        cw = self.canvas_video.winfo_width() or 640
+        ch = self.canvas_video.winfo_height() or 480
 
         h, w = frame.shape[:2]
         factor = min(cw / w, ch / h)
@@ -977,7 +1144,7 @@ class AppControlAccesoGUI:
         self.canvas_video._img_ref = img_tk
 
     def _ejecutar_captura_unica(self):
-        if not self.lista_codificada:
+        if not self.galeria_encodings:
             messagebox.showwarning("Aviso", "Cargando residentes, aguarde un instante.")
             return
 
@@ -990,7 +1157,7 @@ class AppControlAccesoGUI:
             messagebox.showerror("Error", "No se pudo obtener la captura de la cámara.")
             return
 
-        self._procesar_reconocimiento_fotograma(frame)
+        self._procesar_camara_modo_rapido(frame)
         self._dibujar_overlays_fotograma(frame)
         self._mostrar_frame_en_canvas(frame)
 
@@ -999,33 +1166,63 @@ class AppControlAccesoGUI:
             self.tree_auditoria.delete(item)
 
         if not os.path.isfile(ARCHIVO_REGISTRO_CSV):
-            car.inicializar_archivo_auditoria(ARCHIVO_REGISTRO_CSV)
+            self.event_logger = EventLogger(ARCHIVO_REGISTRO_CSV)
             return
 
         try:
             with open(ARCHIVO_REGISTRO_CSV, mode="r", encoding="utf-8") as f:
-                lineas = f.readlines()
+                lineas = [l.strip() for l in f.readlines() if l.strip()]
 
-            for linea in reversed(lineas[1:]):  # Mostrar los más recientes arriba
-                partes = [p.strip() for p in linea.strip().split(",")]
-                if len(partes) >= 4:
-                    residente = partes[0]
-                    fecha = partes[1]
-                    hora = partes[2]
-                    movimiento = partes[3]
-                    tag = "ENTRADA" if movimiento == "ENTRADA" else "SALIDA"
+            if len(lineas) <= 1:
+                return
+
+            encabezado = [c.strip() for c in lineas[0].split(",")]
+
+            # Formato estándar modular: fecha_hora, residente_id, nombre, resultado, movimiento, distancia, motivo
+            if "fecha_hora" in encabezado:
+                reader = csv.DictReader(lineas)
+                filas = list(reader)
+                for row in reversed(filas):
+                    fh = row.get("fecha_hora", "")
+                    fecha = fh.split("T")[0] if "T" in fh else fh[:10]
+                    hora = fh.split("T")[1][:8] if "T" in fh else fh[11:19]
+                    nombre = row.get("nombre", "")
+                    mov = row.get("movimiento", "")
+                    resultado = row.get("resultado", "")
+
+                    tag = "AUTORIZADO" if "AUTORIZADO" in resultado else "DENEGADO"
+                    if mov == "SALIDA":
+                        tag = "SALIDA"
+
                     self.tree_auditoria.insert(
                         "",
                         tk.END,
-                        values=(fecha, hora, residente, movimiento),
+                        values=(fecha, hora, nombre, mov, resultado),
                         tags=(tag,),
                     )
+            else:
+                # Formato legacy: residente, fecha, hora, movimiento, estado
+                for linea in reversed(lineas[1:]):
+                    partes = [p.strip() for p in linea.split(",")]
+                    if len(partes) >= 4:
+                        residente = partes[0]
+                        fecha = partes[1]
+                        hora = partes[2]
+                        movimiento = partes[3]
+                        estado = partes[4] if len(partes) >= 5 else "OK"
+                        tag = "AUTORIZADO" if movimiento == "ENTRADA" else "SALIDA"
+                        self.tree_auditoria.insert(
+                            "",
+                            tk.END,
+                            values=(fecha, hora, residente, movimiento, estado),
+                            tags=(tag,),
+                        )
         except Exception as e:
             print(f"[ERROR] No se pudo leer el CSV: {e}")
 
     def _abrir_archivo_csv(self):
         if not os.path.isfile(ARCHIVO_REGISTRO_CSV):
-            car.inicializar_archivo_auditoria(ARCHIVO_REGISTRO_CSV)
+            self.event_logger = EventLogger(ARCHIVO_REGISTRO_CSV)
         try:
             os.startfile(ARCHIVO_REGISTRO_CSV)
         except Exception as e:
@@ -1069,7 +1266,6 @@ class AppControlAccesoGUI:
             messagebox.showerror("Error", f"No se pudo decodificar la imagen: {nombre_archivo}")
             return
 
-        # Detectar rostro y codificar
         with dlib_lock:
             ubicaciones = motor.detectar_rostros(img_rgb)
             caja = ubicaciones[0] if len(ubicaciones) == 1 else None
@@ -1170,7 +1366,7 @@ class AppControlAccesoGUI:
         self.lbl_metrica_1a1.config(
             text=(
                 f"Distancia biométrica calculada: {distancia:.4f}  |  "
-                f"Umbral máximo permitido: {umbral:.2f}  |  "
+                f"Umbral máximo: {umbral:.2f}  |  "
                 f"{'Menor al umbral (Válido)' if coincide else 'Superior al umbral (Denegado)'}"
             ),
             fg="#f8fafc",

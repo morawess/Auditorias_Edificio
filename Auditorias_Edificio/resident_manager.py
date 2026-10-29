@@ -315,16 +315,15 @@ class ResidenteManager:
     def cargar_galeria(self) -> Tuple[List[np.ndarray], List[Residente]]:
         """
         Carga las codificaciones faciales de todos los residentes registrados.
+
         Cada codificación queda asociada al objeto Residente correspondiente,
         independientemente de si está autorizado o no.
         """
-        from face_engine import codificar_rostro, bgr_a_rgb
-        import cv2
+        from face_engine import cargar_imagen_rgb, codificar_rostro
 
         encodings = []
         residentes_validos = []
 
-        # Listamos sin filtro para cargar a TODOS (Lógica del compañero para auditoría correcta)
         for residente in self.listar():
             for imagen_nombre in residente.imagenes:
                 ruta = os.path.join(self.ruta_imagenes, imagen_nombre)
@@ -337,18 +336,7 @@ class ResidenteManager:
                     continue
 
                 try:
-                    # Corrección de rutas para Windows con caracteres especiales (Tu lógica)
-                    datos = np.fromfile(ruta, dtype=np.uint8)
-                    imagen_bgr = cv2.imdecode(datos, cv2.IMREAD_COLOR) if datos.size > 0 else None
-                    
-                    if imagen_bgr is None:
-                        print(
-                            f"[ADVERTENCIA] No se pudo leer '{imagen_nombre}'. "
-                            f"Se omitirá."
-                        )
-                        continue
-                        
-                    imagen_rgb = bgr_a_rgb(imagen_bgr)
+                    imagen_rgb = cargar_imagen_rgb(ruta)
                     encoding = codificar_rostro(imagen_rgb)
 
                     if encoding is None:
@@ -368,6 +356,7 @@ class ResidenteManager:
                     )
 
         return encodings, residentes_validos
+
 
     def _generar_nombre_archivo_seguro(self, nombre_base: str, extension: str) -> str:
         """
